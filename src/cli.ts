@@ -16,6 +16,8 @@ interface ParseOptions {
 	debug?: boolean;
 	property?: string;
 	lang?: string;
+	refine?: boolean;
+	apiKey?: string;
 }
 
 // ANSI color helpers (avoids chalk dependency which is ESM-only)
@@ -46,6 +48,8 @@ program
 	.option('-p, --property <name>', 'Extract a specific property (e.g., title, description, domain)')
 	.option('--debug', 'Enable debug mode')
 	.option('-l, --lang <code>', 'Preferred language (BCP 47, e.g. en, fr, ja)')
+	.option('-r, --refine', 'Use LLM to refine extracted content (requires GEMINI_API_KEY env var)')
+	.option('--api-key <key>', 'Gemini API key for refinement (or set GEMINI_API_KEY env var)')
 	.action(async (source: string, options: ParseOptions) => {
 		try {
 			// Handle --md alias
@@ -53,11 +57,13 @@ program
 				options.markdown = true;
 			}
 
+			const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
 			const defuddleOpts = {
 				debug: options.debug,
 				markdown: options.markdown,
 				separateMarkdown: options.markdown || options.json,
 				language: options.lang,
+				refine: options.refine ? { apiKey } : undefined,
 			};
 
 			let html: string;
