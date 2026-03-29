@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Defuddle Refine Test</title>
+  <style>
+    body { font-family: system-ui; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 500px; font-size: 13px; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; margin: 0.25rem; cursor: pointer; }
+    input { padding: 0.5rem; font-size: 1rem; }
+    #urlInput { width: 500px; }
+    .status { padding: 0.5rem 1rem; margin: 1rem 0; border-radius: 4px; display: inline-block; }
+    .ready { background: #d4edda; }
+    .downloading { background: #cce5ff; }
+    .unavailable { background: #fff3cd; }
+    .error { background: #f8d7da; }
+    #output { white-space: pre-wrap; }
+    .section { margin: 1.5rem 0; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    .section h3 { margin-top: 0; }
+    label { display: inline-flex; align-items: center; gap: 0.5rem; margin-right: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Defuddle + Gemini Nano Test</h1>
+
+  <div id="aiStatus" class="status">Checking Chrome AI...</div>
+
+  <div class="section">
+    <h3>1. Test Gemini Nano Directly</h3>
+    <p>Test the raw Chrome AI without Defuddle:</p>
+    <input type="text" id="promptInput" placeholder="Enter a prompt..." value="Summarize: AI is transforming web development through automation." style="width:500px">
+    <button onclick="testGeminiDirect()">Test Gemini Nano</button>
+  </div>
+
+  <div class="section">
+    <h3>2. Test Defuddle on URL</h3>
+    <p>Fetch a URL (via proxy) and run Defuddle extraction:</p>
+    <input type="text" id="urlInput" placeholder="https://..." value="https://paulgraham.com/read.html">
+    <br><br>
+    <label><input type="checkbox" id="useRefine" checked> Use LLM Refinement</label>
+    <label><input type="checkbox" id="useMarkdown" checked> Output Markdown</label>
+    <br><br>
+    <button onclick="testUrl()">Fetch & Parse</button>
+    <button onclick="testUrlNoRefine()">Parse Without Refine (compare)</button>
+  </div>
+
+  <div class="section">
+    <h3>3. Quick Tests</h3>
+    <button onclick="testEmbedded()">Test Embedded Article</button>
+    <button onclick="testCurrentPage()">Parse This Page</button>
+    <button onclick="clearOutput()">Clear Output</button>
+  </div>
+
+  <h3>Output</h3>
+  <pre id="output">Results will appear here...</pre>
+
+  <!-- Hidden test article -->
+  <article id="testArticle" style="display:none;">
+    <h1>The Future of AI in Web Development</h1>
+    <div class="author">By Jane Smith</div>
+    <div class="date">March 15, 2024</div>
+    <p>Artificial intelligence is transforming how we build websites. From automated testing to intelligent code completion, developers are finding new ways to leverage AI.</p>
+    <h2>Key Benefits</h2>
+    <ul>
+      <li>Faster development cycles</li>
+      <li>Fewer bugs in production</li>
+      <li>Better accessibility compliance</li>
+    </ul>
+    <p>Consider this code example:</p>
+    <pre><code class="language-javascript">async function extractContent(url) {
+  const response = await fetch(url);
+  const html = await response.text();
+  return parseHTML(html);
+}</code></pre>
+    <h2>Challenges Ahead</h2>
+    <p>However, there are still challenges. AI models can hallucinate, producing incorrect code.</p>
+    <blockquote>
+      <p>"The best results come from human-AI collaboration, not full automation."</p>
+      <cite>— Dr. Alan Turing Institute Report, 2024</cite>
+    </blockquote>
+    <div class="related-posts"><h3>Related Articles</h3><a href="/post1">Post 1</a></div>
+    <div class="newsletter-signup"><p>Subscribe!</p><input type="email"><button>Subscribe</button></div>
+  </article>
+
+  <script src="./dist/index.full.js"></script>
+  <script>
+    const output = document.getElementById('output');
+    const aiStatus = document.getElementById('aiStatus');
+
+    function log(msg) {
+      output.textContent += msg + '\n';
+      console.log(msg);
+    }
+
+    function clearOutput() {
+      output.textContent = '';
+    }
+
+    // Check Chrome AI on load
+    async function checkAI() {
+      if (!window.LanguageModel) {
+        aiStatus.textContent = 'Chrome AI: not available (enable chrome://flags/#prompt-api-for-gemini-nano)';
+        aiStatus.className = 'status unavailable';
+        return;
+      }
+      try {
+        const avail = await LanguageModel.availability();
+        aiStatus.textContent = `Chrome AI: ${avail}`;
+        aiStatus.className = avail === 'readily' ? 'status ready' : 'status unavailable';
+      } catch (e) {
+        aiStatus.textContent = `Chrome AI error: ${e.message}`;
+        aiStatus.className = 'status error';
+      }
+    }
+    checkAI();
+
+    // 1. Test Gemini Nano directly
+    async function testGeminiDirect() {
+      const prompt = document.getElementById('promptInput').value;
+      if (!prompt) return;
+
+      clearOutput();
+      log('=== Testing Gemini Nano Directly ===\n');
+      log(`Prompt: ${prompt}\n`);
+
+      if (!window.LanguageModel) {
+        log('ERROR: LanguageModel not available');
+        return;
+      }
+
+      try {
+        aiStatus.textContent = 'Creating session...';
+        aiStatus.className = 'status downloading';
+
+        const session = await LanguageModel.create({
+          monitor(m) {
+            m.addEventListener('downloadprogress', e => {
+              aiStatus.textContent = `Downloading model: ${(e.loaded * 100).toFixed(1)}%`;
+            });
+          }
+        });
+
+        aiStatus.textContent = 'Chrome AI: readily';
+        aiStatus.className = 'status ready';
+
+        log('Session created. Prompting...\n');
+        const start = performance.now();
+        const response = await session.prompt(prompt);
+        const elapsed = (performance.now() - start).toFixed(0);
+
+        log(`Response (${elapsed}ms):\n${response}`);
+        session.destroy();
+      } catch (e) {
+        log(`ERROR: ${e.message}`);
+        console.error(e);
+      }
+    }
+
+    // 2. Fetch URL via proxy and parse
+    async function testUrl() {
+      const url = document.getElementById('urlInput').value;
+      const useRefine = document.getElementById('useRefine').checked;
+      const useMarkdown = document.getElementById('useMarkdown').checked;
+      if (!url) return;
+
+      clearOutput();
+      log(`=== Fetching ${url} ===\n`);
+      log(`Options: refine=${useRefine}, markdown=${useMarkdown}\n`);
+
+      try {
+        // Fetch via proxy
+        const proxyUrl = `/proxy?url=${encodeURIComponent(url)}`;
+        const resp = await fetch(proxyUrl);
+        if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+        const html = await resp.text();
+        log(`Fetched ${html.length} bytes\n`);
+
+        // Parse
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        const start = performance.now();
+        const result = await new Defuddle(doc, {
+          url: url,
+          markdown: useMarkdown,
+          refine: useRefine
+        }).parseAsync();
+        const elapsed = (performance.now() - start).toFixed(0);
+
+        log(`Title: ${result.title}`);
+        log(`Author: ${result.author || '(none)'}`);
+        log(`Word count: ${result.wordCount}`);
+        log(`Parse time: ${elapsed}ms`);
+        log(`\nRefine info: ${JSON.stringify(result.refineInfo, null, 2)}`);
+        log(`\n=== Content ===\n`);
+        log(result.content);
+      } catch (e) {
+        log(`ERROR: ${e.message}`);
+        console.error(e);
+      }
+    }
+
+    // Compare: parse without refine
+    async function testUrlNoRefine() {
+      document.getElementById('useRefine').checked = false;
+      await testUrl();
+    }
+
+    // 3. Test embedded content
+    async function testEmbedded() {
+      const useRefine = document.getElementById('useRefine').checked;
+      const useMarkdown = document.getElementById('useMarkdown').checked;
+
+      clearOutput();
+      log(`=== Testing Embedded Article ===\n`);
+      log(`Options: refine=${useRefine}, markdown=${useMarkdown}\n`);
+
+      try {
+        const html = document.getElementById('testArticle').innerHTML;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(`<!DOCTYPE html><html><body>${html}</body></html>`, 'text/html');
+
+        const start = performance.now();
+        const result = await new Defuddle(doc, {
+          url: 'https://example.com/test',
+          markdown: useMarkdown,
+          refine: useRefine
+        }).parseAsync();
+        const elapsed = (performance.now() - start).toFixed(0);
+
+        log(`Title: ${result.title}`);
+        log(`Word count: ${result.wordCount}`);
+        log(`Parse time: ${elapsed}ms`);
+        log(`\nRefine info: ${JSON.stringify(result.refineInfo, null, 2)}`);
+        log(`\n=== Content ===\n`);
+        log(result.content);
+      } catch (e) {
+        log(`ERROR: ${e.message}`);
+        console.error(e);
+      }
+    }
+
+    // Test current page
+    async function testCurrentPage() {
+      const useRefine = document.getElementById('useRefine').checked;
+      const useMarkdown = document.getElementById('useMarkdown').checked;
+
+      clearOutput();
+      log(`=== Parsing Current Page ===\n`);
+
+      try {
+        const start = performance.now();
+        const result = await new Defuddle(document, {
+          url: location.href,
+          markdown: useMarkdown,
+          refine: useRefine
+        }).parseAsync();
+        const elapsed = (performance.now() - start).toFixed(0);
+
+        log(`Title: ${result.title}`);
+        log(`Word count: ${result.wordCount}`);
+        log(`Parse time: ${elapsed}ms`);
+        log(`\nRefine info: ${JSON.stringify(result.refineInfo, null, 2)}`);
+        log(`\n=== Content ===\n`);
+        log(result.content);
+      } catch (e) {
+        log(`ERROR: ${e.message}`);
+        console.error(e);
+      }
+    }
+  </script>
+</body>
+</html>

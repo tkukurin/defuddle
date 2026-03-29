@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Defuddle Refine Evaluation</title>
+  <style>
+    body { font-family: system-ui; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #ddd; }
+    th { background: #f5f5f5; }
+    .score { text-align: right; font-family: monospace; }
+    .improved { background: #d4edda; }
+    .degraded { background: #f8d7da; }
+    .same { background: #fff; }
+    .running { background: #cce5ff; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; margin: 0.25rem; }
+    .status { padding: 0.5rem 1rem; margin: 1rem 0; border-radius: 4px; display: inline-block; }
+    .ready { background: #d4edda; }
+    .unavailable { background: #fff3cd; }
+    #progress { margin: 1rem 0; }
+    .summary { background: #f5f5f5; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+    pre { background: #f4f4f4; padding: 0.5rem; overflow: auto; max-height: 200px; font-size: 12px; }
+    .diff-view { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+    .diff-view pre { max-height: 300px; }
+    details { margin: 0.5rem 0; }
+    summary { cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Defuddle Refinement Evaluation</h1>
+  <p>Tests refinement against fixture test set using Chrome's Gemini Nano.</p>
+
+  <div id="aiStatus" class="status">Checking Chrome AI...</div>
+
+  <div>
+    <label>Fixtures to test: <input type="number" id="limitInput" value="10" min="1" max="100" style="width:60px"></label>
+    <button onclick="runEval()">Run Evaluation</button>
+    <button onclick="stopEval()">Stop</button>
+  </div>
+
+  <div id="progress"></div>
+
+  <div id="summary" class="summary" style="display:none">
+    <strong>Summary:</strong>
+    <span id="summaryText"></span>
+  </div>
+
+  <table id="results">
+    <thead>
+      <tr>
+        <th>Fixture</th>
+        <th class="score">Base</th>
+        <th class="score">Refined</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody id="resultsBody">
+    </tbody>
+  </table>
+
+  <script src="./dist/index.full.js"></script>
+  <script>
+    const aiStatus = document.getElementById('aiStatus');
+    const resultsBody = document.getElementById('resultsBody');
+    const progress = document.getElementById('progress');
+    const summary = document.getElementById('summary');
+    const summaryText = document.getElementById('summaryText');
+
+    let stopRequested = false;
+    let session = null;
+
+    // Check Chrome AI
+    async function checkAI() {
+      if (!window.LanguageModel) {
+        aiStatus.textContent = 'Chrome AI: not available';
+        aiStatus.className = 'status unavailable';
+        return false;
+      }
+      const avail = await LanguageModel.availability();
+      aiStatus.textContent = `Chrome AI: ${avail}`;
+      // Chrome returns "available", "readily", "after-download", or "no"
+      const isReady = avail === 'available' || avail === 'readily';
+      aiStatus.className = isReady ? 'status ready' : 'status unavailable';
+      return isReady;
+    }
+    checkAI();
+
+    // Fetch fixture list from server
+    async function getFixtures() {
+      const resp = await fetch('/fixtures-list');
+      return resp.json();
+    }
+
+    // Simple line-based similarity
+    function similarity(a, b) {
+      if (a === b) return 1;
+      const aLines = a.trim().split('\n');
+      const bLines = b.trim().split('\n');
+      const bSet = new Set(bLines.map(l => l.trim()));
+      let matches = 0;
+      for (const line of aLines) {
+        if (bSet.has(line.trim())) matches++;
+      }
+      return matches / Math.max(aLines.length, bLines.length);
+    }
+
+    function extractExpectedMd(content) {
+      const match = content.match(/```json\n[\s\S]*?\n```\n\n([\s\S]*)/);
+      return match ? match[1].trim() : content.trim();
+    }
+
+    function stopEval() {
+      stopRequested = true;
+      progress.textContent = 'Stopping...';
+    }
+
+    async function runEval() {
+      stopRequested = false;
+      resultsBody.innerHTML = '';
+      summary.style.display = 'none';
+
+      const limit = parseInt(document.getElementById('limitInput').value) || 10;
+
+      // Check AI
+      const aiReady = await checkAI();
+      if (!aiReady) {
+        progress.textContent = 'Error: Chrome AI not ready. Download the model first.';
+        return;
+      }
+
+      // Create session once for all tests
+      progress.textContent = 'Creating Gemini Nano session...';
+      try {
+        session = await LanguageModel.create({
+          initialPrompts: [{
+            role: 'system',
+            content: `You improve web content extraction. Fix artifacts, restore missing content, clean formatting. Return ONLY the improved markdown, no explanations.`
+          }]
+        });
+      } catch (e) {
+        progress.textContent = `Error creating session: ${e.message}`;
+        return;
+      }
+
+      // Get fixtures
+      progress.textContent = 'Loading fixtures...';
+      let fixtures;
+      try {
+        fixtures = await getFixtures();
+      } catch (e) {
+        progress.textContent = `Error loading fixtures: ${e.message}`;
+        return;
+      }
+
+      fixtures = fixtures.slice(0, limit);
+
+      let improved = 0, degraded = 0, same = 0, errors = 0;
+      let totalBase = 0, totalRefined = 0;
+
+      for (let i = 0; i < fixtures.length; i++) {
+        if (stopRequested) break;
+
+        const fixture = fixtures[i];
+        progress.textContent = `Processing ${i + 1}/${fixtures.length}: ${fixture.name}`;
+
+        // Add row
+        const row = document.createElement('tr');
+        row.className = 'running';
+        row.innerHTML = `
+          <td>${fixture.name}</td>
+          <td class="score">...</td>
+          <td class="score">...</td>
+          <td>Running...</td>
+        `;
+        resultsBody.appendChild(row);
+
+        try {
+          // Fetch fixture and expected
+          const [htmlResp, expectedResp] = await Promise.all([
+            fetch(`/tests/fixtures/${fixture.name}.html`),
+            fetch(`/tests/expected/${fixture.name}.md`)
+          ]);
+
+          const html = await htmlResp.text();
+          const expected = await expectedResp.text();
+          const expectedMd = extractExpectedMd(expected);
+
+          // Extract URL from fixture
+          const urlMatch = html.match(/<!--\s*\{"url":\s*"([^"]+)"\}\s*-->/);
+          const url = urlMatch ? urlMatch[1] : `https://${fixture.name}`;
+
+          // Parse HTML
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+
+          // Run base extraction
+          const baseResult = await new Defuddle(doc, { url, markdown: true }).parseAsync();
+          const baseScore = similarity(baseResult.content, expectedMd);
+
+          // Run with refinement using our session
+          const doc2 = parser.parseFromString(html, 'text/html');
+          const baseResult2 = await new Defuddle(doc2, { url, markdown: true }).parseAsync();
+
+          // Manual refinement with session
+          let refinedContent = baseResult2.content;
+          let refinedScore = baseScore;
+
+          try {
+            const prompt = `Original HTML (truncated):\n\`\`\`html\n${html.slice(0, 3000)}\n\`\`\`\n\nExtracted markdown:\n\`\`\`markdown\n${baseResult2.content}\n\`\`\`\n\nReturn improved markdown:`;
+            const refined = await session.prompt(prompt);
+
+            // Clean response
+            let cleaned = refined.trim();
+            if (cleaned.startsWith('```markdown')) cleaned = cleaned.slice(11);
+            else if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
+            if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
+            refinedContent = cleaned.trim();
+            refinedScore = similarity(refinedContent, expectedMd);
+          } catch (e) {
+            console.error('Refinement error:', e);
+          }
+
+          totalBase += baseScore;
+          totalRefined += refinedScore;
+
+          const isImproved = refinedScore > baseScore + 0.01;
+          const isDegraded = refinedScore < baseScore - 0.01;
+
+          if (isImproved) improved++;
+          else if (isDegraded) degraded++;
+          else same++;
+
+          row.className = isImproved ? 'improved' : isDegraded ? 'degraded' : 'same';
+          row.innerHTML = `
+            <td>
+              <details>
+                <summary>${fixture.name}</summary>
+                <div class="diff-view">
+                  <div><strong>Base:</strong><pre>${escapeHtml(baseResult.content.slice(0, 1000))}</pre></div>
+                  <div><strong>Refined:</strong><pre>${escapeHtml(refinedContent.slice(0, 1000))}</pre></div>
+                </div>
+              </details>
+            </td>
+            <td class="score">${(baseScore * 100).toFixed(1)}%</td>
+            <td class="score">${(refinedScore * 100).toFixed(1)}%</td>
+            <td>${isImproved ? '✅ Improved' : isDegraded ? '⚠️ Degraded' : '➖ Same'}</td>
+          `;
+
+        } catch (e) {
+          errors++;
+          row.className = 'degraded';
+          row.innerHTML = `
+            <td>${fixture.name}</td>
+            <td class="score">-</td>
+            <td class="score">-</td>
+            <td>❌ ${e.message.slice(0, 50)}</td>
+          `;
+        }
+
+        // Small delay to not overwhelm
+        await new Promise(r => setTimeout(r, 100));
+      }
+
+      session.destroy();
+      session = null;
+
+      const n = fixtures.length;
+      progress.textContent = stopRequested ? 'Stopped.' : 'Done.';
+      summary.style.display = 'block';
+      summaryText.innerHTML = `
+        <strong>${improved}</strong> improved,
+        <strong>${degraded}</strong> degraded,
+        <strong>${same}</strong> same,
+        <strong>${errors}</strong> errors |
+        Avg base: <strong>${(totalBase / n * 100).toFixed(1)}%</strong>,
+        Avg refined: <strong>${(totalRefined / n * 100).toFixed(1)}%</strong>
+      `;
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+  </script>
+</body>
+</html>
