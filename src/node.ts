@@ -1,6 +1,7 @@
 import { Defuddle as DefuddleClass } from './defuddle';
 import type { DefuddleOptions, DefuddleResponse } from './types';
 import { toMarkdown } from './markdown';
+import { refineExtraction } from './refine';
 
 /**
  * Parse HTML content from a Document, HTML string, or JSDOM instance.
@@ -16,10 +17,12 @@ export async function Defuddle(
 	options?: DefuddleOptions
 ): Promise<DefuddleResponse> {
 	let doc: Document;
+	let originalHtml: string | undefined;
 
 	if (typeof input === 'string') {
 		// @deprecated Pass a Document instead of an HTML string.
 		// String input will be removed in the next major version.
+		originalHtml = input;
 		const { parseLinkedomHTML } = await import('./utils/linkedom-compat');
 		doc = parseLinkedomHTML(input, url);
 	} else if (typeof input === 'object' && input !== null && 'window' in input && input.window?.document) {
@@ -40,7 +43,29 @@ export async function Defuddle(
 
 	const result = await defuddle.parseAsync();
 
+	// Get HTML before markdown conversion for refinement comparison
+	const contentHtmlForRefine = result.content;
+
 	toMarkdown(result, options ?? {}, pageUrl);
+
+	// Apply LLM refinement if requested
+	if (options?.refine) {
+		const refineOpts = typeof options.refine === 'object' ? options.refine : {};
+		const htmlContext = originalHtml || contentHtmlForRefine;
+
+		const refineResult = await refineExtraction(
+			htmlContext,
+			result.content,
+			refineOpts
+		);
+
+		result.content = refineResult.content;
+		result.refineInfo = {
+			refined: refineResult.refined,
+			method: refineResult.method,
+			error: refineResult.error
+		};
+	}
 
 	return result;
 }
