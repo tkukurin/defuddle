@@ -101,6 +101,8 @@ npx defuddle parse page.html --debug
 | `--property <name>` | `-p` | Extract a specific property (e.g., title, description, domain) |
 | `--debug` | | Enable debug mode |
 | `--lang <code>` | `-l` | Preferred language (BCP 47, e.g. `en`, `fr`, `ja`) |
+| `--refine` | `-r` | Use LLM to refine extracted content (requires `GEMINI_API_KEY` env var) |
+| `--api-key <key>` | | Gemini API key for refinement (or set `GEMINI_API_KEY` env var) |
 
 ## Installation
 
@@ -155,6 +157,7 @@ Defuddle returns an object with the following properties:
 | `title` | string | Title of the article |
 | `wordCount` | number | Total number of words in the extracted content |
 | `debug` | object | Debug info including content selector and removals (when `debug: true`) |
+| `refineInfo` | object | LLM refinement info (when `refine` is enabled). Contains `refined`, `method`, and `error` fields. |
 
 ## Bundles
 
@@ -185,6 +188,7 @@ The core bundle is recommended for most use cases. It still handles math content
 | `useAsync`               | boolean | true    | Allow async extractors to fetch from third-party APIs when no local content is available. |
 | `language`               | string  |         | Preferred language (BCP 47 tag, e.g. `en`, `fr`). Sets `Accept-Language` header and selects transcript language. |
 | `includeReplies`         | boolean \| 'extractors' | 'extractors' | Include replies: `'extractors'` for site-specific extractors only, `true` for all, `false` for none. |
+| `refine`                 | boolean \| object | false | Use LLM to refine extracted content. In browsers, uses Chrome's built-in Gemini Nano. In Node.js, requires `{ apiKey }`. See [LLM Refinement](#llm-refinement). |
 
 ## HTML standardization
 
@@ -287,6 +291,57 @@ npm run build
 When using `parseAsync()`, if no content can be extracted from the local HTML, Defuddle may fetch content from third-party APIs as a fallback. This only happens when the page HTML contains no usable content (e.g. client-side rendered SPAs). You can disable this by setting `useAsync: false` in options.
 
 - [FxTwitter API](https://github.com/FixTweet/FxTwitter) — Used to extract X (Twitter) article content, which is not available in server-rendered HTML.
+
+## LLM Refinement
+
+Defuddle can optionally use an LLM to refine extracted content. This compares the extracted markdown against the original HTML and fixes common extraction issues like missing content, broken formatting, or garbled text.
+
+### Browser (Chrome 138+)
+
+In browsers with Chrome's built-in AI, refinement uses Gemini Nano locally — no API key required:
+
+```javascript
+const result = await new Defuddle(document, {
+  url: location.href,
+  markdown: true,
+  refine: true
+}).parseAsync();
+
+console.log(result.refineInfo); // { refined: true, method: 'chrome-prompt' }
+```
+
+Chrome AI requires enabling `chrome://flags/#prompt-api-for-gemini-nano`. The model (~2GB) downloads on first use.
+
+### Node.js
+
+In Node.js, refinement requires a Gemini API key:
+
+```javascript
+const result = await Defuddle(doc, url, {
+  markdown: true,
+  refine: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: 'gemini-1.5-flash' // optional, default
+  }
+});
+```
+
+### CLI
+
+```bash
+GEMINI_API_KEY=xxx npx defuddle parse https://example.com --markdown --refine
+```
+
+### Refine options
+
+When `refine` is an object, it accepts:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `apiKey` | string | | Gemini API key (required for Node.js, optional in browser) |
+| `model` | string | `gemini-1.5-flash` | Gemini model to use for API calls |
+| `strategy` | string | `prompt` | `'prompt'` for flexible analysis, `'rewriter'` for simple cleanup |
+| `maxHtmlContext` | number | 4000 | Max characters of original HTML to include in prompt |
 
 ## Debugging
 
