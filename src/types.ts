@@ -31,6 +31,15 @@ export interface DebugInfo {
 	removals: DebugRemoval[];
 }
 
+export interface RefineInfo {
+	/** Whether content was refined by LLM */
+	refined: boolean;
+	/** Method used: 'chrome-prompt' | 'chrome-rewriter' | 'gemini-api' | 'none' */
+	method: string;
+	/** Error message if refinement failed */
+	error?: string;
+}
+
 export interface DefuddleResponse extends DefuddleMetadata {
 	content: string;
 	contentMarkdown?: string;
@@ -38,6 +47,8 @@ export interface DefuddleResponse extends DefuddleMetadata {
 	metaTags?: MetaTagItem[];
 	debug?: DebugInfo;
 	variables?: { [key: string]: string };
+	/** Info about LLM refinement (if refine option was enabled) */
+	refineInfo?: RefineInfo;
 }
 
 export interface DefuddleOptions {
@@ -139,6 +150,28 @@ export interface DefuddleOptions {
 	 * - false: exclude all replies
 	 */
 	includeReplies?: boolean | 'extractors';
+
+	/**
+	 * Use LLM to refine extracted content (second pass)
+	 * Compares extracted markdown against original HTML and fixes issues.
+	 *
+	 * - false (default): No refinement
+	 * - true: Use Chrome's built-in Gemini Nano (browser) or require apiKey (server)
+	 * - object: Detailed refinement options
+	 *
+	 * Browser: Uses Chrome's built-in AI (no API key needed, Chrome 138+)
+	 * Node.js/Workers: Requires Gemini API key
+	 */
+	refine?: boolean | {
+		/** Gemini API key (required for Node.js/Workers, optional in browser) */
+		apiKey?: string;
+		/** Gemini model for API calls @default 'gemini-1.5-flash' */
+		model?: string;
+		/** Strategy: 'prompt' (flexible) or 'rewriter' (simple cleanup) @default 'prompt' */
+		strategy?: 'prompt' | 'rewriter';
+		/** Max HTML context length in characters @default 4000 */
+		maxHtmlContext?: number;
+	};
 }
 
 export interface ExtractorVariables {
